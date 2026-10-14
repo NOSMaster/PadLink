@@ -30,8 +30,6 @@ its byte order.
 - A **SoftMAC** card, where the Linux CPU builds and encrypts the frames
   (mac80211 drivers). On FullMAC cards the firmware does the WPA handshake
   itself, and we can't apply Nintendo's tweaks there. **[C]**
-- Your RTL8852BE (`rtw89_8852be`) is mac80211/SoftMAC. Vanilla's compatibility
-  list marks it as working, and Barista was developed on it. **[C]**
 
 ### 1.2 The obfuscations (only two small ones)
 
