@@ -61,7 +61,7 @@ Needs CMake ≥ 3.24, GCC ≥ 13, git, make, libnl-3 and OpenSSL. Optional:
 nasm (a much faster video encoder) and FFmpeg (for the video self-test).
 
 ```sh
-git clone <this repository> padlink && cd padlink
+git clone https://github.com/NOSMaster/PadLink.git && cd PadLink
 cmake -S . -B build
 cmake --build build -j
 ctest --test-dir build --output-on-failure

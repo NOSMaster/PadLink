@@ -1,0 +1,29 @@
+From 7cd559e0b9d4befef403945a7b85d292befa2772 Mon Sep 17 00:00:00 2001
+From: padlink <padlink@localhost.invalid>
+Date: Tue, 13 Oct 2026 20:02:58 +0200
+Subject: [PATCH 1/5] padlink: add CONFIG_PADLINK_DRC build option
+
+All Wii U GamePad (DRC) changes in this series are compiled only when
+CONFIG_PADLINK_DRC=y is set in hostapd/.config.
+---
+ hostapd/Makefile | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/hostapd/Makefile b/hostapd/Makefile
+index ca44392..da05689 100644
+--- a/hostapd/Makefile
++++ b/hostapd/Makefile
+@@ -37,6 +37,10 @@ endif
+ endif
+ endif
+ 
++ifdef CONFIG_PADLINK_DRC
++CFLAGS += -DCONFIG_PADLINK_DRC
++endif
++
+ ifdef CONFIG_TESTING_OPTIONS
+ CFLAGS += -DCONFIG_TESTING_OPTIONS
+ CONFIG_WPS_TESTING=y
+-- 
+2.56.0
+

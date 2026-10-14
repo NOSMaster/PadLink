@@ -1,0 +1,137 @@
+From cff9461d5d7b78e5962dad63bd241b94b4e0ecb4 Mon Sep 17 00:00:00 2001
+From: padlink <padlink@localhost.invalid>
+Date: Tue, 13 Oct 2026 20:02:58 +0200
+Subject: [PATCH 2/5] padlink: Nintendo RSN selectors on air and PTK rotation
+
+The Wii U GamePad advertises and expects AKM a4:c0:e1:2 and cipher
+a4:c0:e1:4 instead of 00:0f:ac:2 / 00:0f:ac:4, and rotates the derived
+PTK left by 3 bytes. Only the RSN IE writer and parser see the vendor
+selectors; everything else, including the nl80211 key/cipher attributes,
+keeps the standard values the kernel accepts.
+---
+ src/ap/wpa_auth_ie.c    | 26 ++++++++++++++++++++++++++
+ src/common/wpa_common.c | 18 ++++++++++++++++++
+ src/common/wpa_common.h |  6 ++++++
+ 3 files changed, 50 insertions(+)
+
+diff --git a/src/ap/wpa_auth_ie.c b/src/ap/wpa_auth_ie.c
+index 2efadf8..1fb9f4b 100644
+--- a/src/ap/wpa_auth_ie.c
++++ b/src/ap/wpa_auth_ie.c
+@@ -119,6 +119,18 @@ static u16 wpa_own_rsn_capab(struct wpa_auth_config *conf)
+ }
+ 
+ 
++#ifdef CONFIG_PADLINK_DRC
++/* Swap a standard selector for its Nintendo on-air equivalent. */
++static void drc_put_vendor_selector(u8 *pos)
++{
++	if (RSN_SELECTOR_GET(pos) == RSN_CIPHER_SUITE_CCMP)
++		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_CCMP_DRC);
++	else if (RSN_SELECTOR_GET(pos) == RSN_AUTH_KEY_MGMT_PSK_OVER_802_1X)
++		RSN_SELECTOR_PUT(pos, RSN_AUTH_KEY_MGMT_PSK_DRC);
++}
++#endif /* CONFIG_PADLINK_DRC */
++
++
+ int wpa_write_rsn_ie(struct wpa_auth_config *conf, u8 *buf, size_t len,
+ 		     const u8 *pmkid)
+ {
+@@ -139,6 +151,9 @@ int wpa_write_rsn_ie(struct wpa_auth_config *conf, u8 *buf, size_t len,
+ 		return -1;
+ 	}
+ 	RSN_SELECTOR_PUT(pos, suite);
++#ifdef CONFIG_PADLINK_DRC
++	drc_put_vendor_selector(pos);
++#endif /* CONFIG_PADLINK_DRC */
+ 	pos += RSN_SELECTOR_LEN;
+ 
+ 	num_suites = 0;
+@@ -154,6 +169,14 @@ int wpa_write_rsn_ie(struct wpa_auth_config *conf, u8 *buf, size_t len,
+ #endif /* CONFIG_RSN_TESTING */
+ 
+ 	res = rsn_cipher_put_suites(pos, conf->rsn_pairwise);
++#ifdef CONFIG_PADLINK_DRC
++	{
++		int i;
++
++		for (i = 0; i < res; i++)
++			drc_put_vendor_selector(pos + i * RSN_SELECTOR_LEN);
++	}
++#endif /* CONFIG_PADLINK_DRC */
+ 	num_suites += res;
+ 	pos += res * RSN_SELECTOR_LEN;
+ 
+@@ -191,6 +214,9 @@ int wpa_write_rsn_ie(struct wpa_auth_config *conf, u8 *buf, size_t len,
+ 	}
+ 	if (conf->wpa_key_mgmt & WPA_KEY_MGMT_PSK) {
+ 		RSN_SELECTOR_PUT(pos, RSN_AUTH_KEY_MGMT_PSK_OVER_802_1X);
++#ifdef CONFIG_PADLINK_DRC
++		drc_put_vendor_selector(pos);
++#endif /* CONFIG_PADLINK_DRC */
+ 		pos += RSN_SELECTOR_LEN;
+ 		num_suites++;
+ 	}
+diff --git a/src/common/wpa_common.c b/src/common/wpa_common.c
+index 1cfdd9a..1a16969 100644
+--- a/src/common/wpa_common.c
++++ b/src/common/wpa_common.c
+@@ -562,6 +562,16 @@ int wpa_pmk_to_ptk(const u8 *pmk, size_t pmk_len, const char *label,
+ 	if (z && z_len)
+ 		wpa_hexdump_key(MSG_DEBUG, "WPA: Z.x", z, z_len);
+ 	wpa_hexdump_key(MSG_DEBUG, "WPA: PMK", pmk, pmk_len);
++#ifdef CONFIG_PADLINK_DRC
++	/* Wii U GamePad: the whole PTK is rotated left by 3 bytes. */
++	{
++		u8 head[3];
++
++		os_memcpy(head, tmp, sizeof(head));
++		os_memmove(tmp, tmp + sizeof(head), ptk_len - sizeof(head));
++		os_memcpy(tmp + ptk_len - sizeof(head), head, sizeof(head));
++	}
++#endif /* CONFIG_PADLINK_DRC */
+ 	wpa_hexdump_key(MSG_DEBUG, "WPA: PTK", tmp, ptk_len);
+ 
+ 	os_memcpy(ptk->kck, tmp, ptk->kck_len);
+@@ -1738,6 +1748,10 @@ int pasn_auth_frame_hash(int akmp, int cipher, const u8 *data, size_t len,
+ 
+ static int rsn_selector_to_bitfield(const u8 *s)
+ {
++#ifdef CONFIG_PADLINK_DRC
++	if (RSN_SELECTOR_GET(s) == RSN_CIPHER_SUITE_CCMP_DRC)
++		return WPA_CIPHER_CCMP;
++#endif /* CONFIG_PADLINK_DRC */
+ 	if (RSN_SELECTOR_GET(s) == RSN_CIPHER_SUITE_NONE)
+ 		return WPA_CIPHER_NONE;
+ 	if (RSN_SELECTOR_GET(s) == RSN_CIPHER_SUITE_TKIP)
+@@ -1766,6 +1780,10 @@ static int rsn_selector_to_bitfield(const u8 *s)
+ 
+ static int rsn_key_mgmt_to_bitfield(const u8 *s)
+ {
++#ifdef CONFIG_PADLINK_DRC
++	if (RSN_SELECTOR_GET(s) == RSN_AUTH_KEY_MGMT_PSK_DRC)
++		return WPA_KEY_MGMT_PSK;
++#endif /* CONFIG_PADLINK_DRC */
+ 	if (RSN_SELECTOR_GET(s) == RSN_AUTH_KEY_MGMT_UNSPEC_802_1X)
+ 		return WPA_KEY_MGMT_IEEE8021X;
+ 	if (RSN_SELECTOR_GET(s) == RSN_AUTH_KEY_MGMT_PSK_OVER_802_1X)
+diff --git a/src/common/wpa_common.h b/src/common/wpa_common.h
+index 1e31368..6eb0130 100644
+--- a/src/common/wpa_common.h
++++ b/src/common/wpa_common.h
+@@ -98,6 +98,12 @@ WPA_CIPHER_BIP_CMAC_256)
+ #define RSN_AUTH_KEY_MGMT_DPP RSN_SELECTOR(0x50, 0x6f, 0x9a, 0x02)
+ 
+ #define RSN_CIPHER_SUITE_NONE RSN_SELECTOR(0x00, 0x0f, 0xac, 0)
++#ifdef CONFIG_PADLINK_DRC
++/* Wii U GamePad: Nintendo OUI selectors used on air instead of 00:0f:ac.
++ * Internally hostapd keeps using the standard values. */
++#define RSN_CIPHER_SUITE_CCMP_DRC RSN_SELECTOR(0xa4, 0xc0, 0xe1, 4)
++#define RSN_AUTH_KEY_MGMT_PSK_DRC RSN_SELECTOR(0xa4, 0xc0, 0xe1, 2)
++#endif /* CONFIG_PADLINK_DRC */
+ #define RSN_CIPHER_SUITE_WEP40 RSN_SELECTOR(0x00, 0x0f, 0xac, 1)
+ #define RSN_CIPHER_SUITE_TKIP RSN_SELECTOR(0x00, 0x0f, 0xac, 2)
+ #if 0
+-- 
+2.56.0
+

@@ -1,0 +1,58 @@
+From 60416cf04520197b9615eb452c6fa2d7ecbe78e7 Mon Sep 17 00:00:00 2001
+From: padlink <padlink@localhost.invalid>
+Date: Tue, 13 Oct 2026 21:21:26 +0200
+Subject: [PATCH] padlink: report macroblock row end offsets of the CABAC
+ stream
+
+The Wii U GamePad receives each frame as one CABAC slice cut into five
+chunks of six macroblock rows. To cut at the right bytes the caller needs
+to know where each row ends; x264 knows this while encoding. When
+b_padlink_row_offsets is set, write those offsets into the int array passed
+as the input picture's opaque pointer.
+---
+ encoder/encoder.c | 5 +++++
+ x264.h            | 8 ++++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/encoder/encoder.c b/encoder/encoder.c
+index 20e620a..792ee05 100644
+--- a/encoder/encoder.c
++++ b/encoder/encoder.c
+@@ -3056,6 +3056,11 @@ cont:
+         if( b_deblock )
+             x264_macroblock_deblock_strength( h );
+ 
++        /* padlink: record where each macroblock row ends in the CABAC stream. */
++        if( h->param.b_padlink_row_offsets && h->param.b_cabac && h->fenc->opaque &&
++            i_mb_x == h->mb.i_mb_width - 1 && i_mb_y < X264_PADLINK_MAX_ROWS )
++            ((int *)h->fenc->opaque)[i_mb_y] = x264_cabac_pos( &h->cabac ) / 8;
++
+         if( mb_xy == h->sh.i_last_mb )
+             break;
+ 
+diff --git a/x264.h b/x264.h
+index b3223cd..42e4e6a 100644
+--- a/x264.h
++++ b/x264.h
+@@ -620,10 +620,18 @@ typedef struct x264_param_t
+      */
+     void (*nalu_process)( x264_t *h, x264_nal_t *nal, void *opaque );
+ 
++    /* padlink (Wii U GamePad): if set and CABAC is used, the encoder writes,
++     * for each macroblock row of the frame, the byte offset (relative to the
++     * start of the slice data) at which that row ends, into the int array of
++     * X264_PADLINK_MAX_ROWS entries passed as x264_picture_t.opaque. */
++    int b_padlink_row_offsets;
++
+     /* For internal use only */
+     void *opaque;
+ } x264_param_t;
+ 
++#define X264_PADLINK_MAX_ROWS 68
++
+ X264_API void x264_nal_encode( x264_t *h, uint8_t *dst, x264_nal_t *nal );
+ 
+ /****************************************************************************
+-- 
+2.56.0
+

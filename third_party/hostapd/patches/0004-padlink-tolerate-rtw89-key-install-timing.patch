@@ -1,0 +1,127 @@
+From 5bf8ae05a1d7a08f6070fd9c98686d04a6535b67 Mon Sep 17 00:00:00 2001
+From: padlink <padlink@localhost.invalid>
+Date: Tue, 13 Oct 2026 20:02:58 +0200
+Subject: [PATCH 4/5] padlink: tolerate rtw89 key-install timing
+
+Defer a GTK that the driver rejects with ENOENT until the first pairwise
+key succeeds, retry a pairwise key for up to ~0.5 s on ENOENT, and keep
+the AUTHENTICATED/ASSOCIATED station flags in the post-association flag
+update. Other errors are returned unchanged.
+---
+ src/ap/ap_drv_ops.c          |  5 +++
+ src/drivers/driver_nl80211.c | 77 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 82 insertions(+)
+
+diff --git a/src/ap/ap_drv_ops.c b/src/ap/ap_drv_ops.c
+index c473491..26b77f0 100644
+--- a/src/ap/ap_drv_ops.c
++++ b/src/ap/ap_drv_ops.c
+@@ -316,6 +316,11 @@ int hostapd_set_sta_flags(struct hostapd_data *hapd, struct sta_info *sta)
+ 	total_flags = hostapd_sta_flags_to_drv(sta->flags);
+ 	set_flags = WPA_STA_SHORT_PREAMBLE | WPA_STA_WMM | WPA_STA_MFP |
+ 		WPA_STA_AUTHORIZED;
++#ifdef CONFIG_PADLINK_DRC
++	/* rtw89: re-assert the station state after the association ACK so
++	 * mac80211 accepts the GamePad's pairwise key. */
++	set_flags |= WPA_STA_AUTHENTICATED | WPA_STA_ASSOCIATED;
++#endif /* CONFIG_PADLINK_DRC */
+ 
+ 	/*
+ 	 * All the station flags other than WPA_STA_SHORT_PREAMBLE are relevant
+diff --git a/src/drivers/driver_nl80211.c b/src/drivers/driver_nl80211.c
+index e6fbad9..9bf6637 100644
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -10676,12 +10676,89 @@ nl80211_tdls_disable_channel_switch(void *priv, const u8 *addr)
+ #endif /* CONFIG TDLS */
+ 
+ 
++#ifdef CONFIG_PADLINK_DRC
++/*
++ * rtw89 can answer -ENOENT while its AP/station security context is still
++ * being set up: for the first GTK right after START_AP, and for the GamePad's
++ * PTK when it completes the 4-way handshake immediately after reassociating.
++ * Defer that GTK until a PTK succeeds, and retry the PTK for a short time.
++ */
++#define DRC_PTK_RETRIES 25
++#define DRC_PTK_RETRY_USEC 20000
++
++static struct {
++	struct i802_bss *bss;
++	struct wpa_driver_set_key_params params;
++	char ifname[IFNAMSIZ + 1];
++	u8 key[64];
++	u8 seq[16];
++} drc_deferred_gtk;
++
++static int drc_defer_gtk(struct i802_bss *bss,
++			 const struct wpa_driver_set_key_params *params)
++{
++	if (params->key_len > sizeof(drc_deferred_gtk.key) ||
++	    params->seq_len > sizeof(drc_deferred_gtk.seq))
++		return -1;
++	drc_deferred_gtk.bss = bss;
++	drc_deferred_gtk.params = *params;
++	if (params->ifname) {
++		os_strlcpy(drc_deferred_gtk.ifname, params->ifname,
++			   sizeof(drc_deferred_gtk.ifname));
++		drc_deferred_gtk.params.ifname = drc_deferred_gtk.ifname;
++	}
++	os_memcpy(drc_deferred_gtk.key, params->key, params->key_len);
++	drc_deferred_gtk.params.key = drc_deferred_gtk.key;
++	if (params->seq) {
++		os_memcpy(drc_deferred_gtk.seq, params->seq, params->seq_len);
++		drc_deferred_gtk.params.seq = drc_deferred_gtk.seq;
++	}
++	wpa_printf(MSG_INFO, "padlink: GTK install returned ENOENT; deferred until the first pairwise key");
++	return 0;
++}
++#endif /* CONFIG_PADLINK_DRC */
++
++
+ static int driver_nl80211_set_key(void *priv,
+ 				  struct wpa_driver_set_key_params *params)
+ {
+ 	struct i802_bss *bss = priv;
++#ifdef CONFIG_PADLINK_DRC
++	int ret, attempt;
++	int installing = params->alg != WPA_ALG_NONE && params->key;
+ 
++	ret = wpa_driver_nl80211_set_key(bss, params);
++	if (ret != -ENOENT || !installing)
++		goto done;
++
++	if ((params->key_flag & KEY_FLAG_GROUP) &&
++	    !(params->key_flag & KEY_FLAG_PAIRWISE))
++		return drc_defer_gtk(bss, params) == 0 ? 0 : ret;
++
++	if (!(params->key_flag & KEY_FLAG_PAIRWISE))
++		goto done;
++	for (attempt = 1; attempt <= DRC_PTK_RETRIES && ret == -ENOENT;
++	     attempt++) {
++		os_sleep(0, DRC_PTK_RETRY_USEC);
++		ret = wpa_driver_nl80211_set_key(bss, params);
++	}
++	wpa_printf(MSG_INFO, "padlink: pairwise key install retried %d time(s), result %d",
++		   attempt - 1, ret);
++done:
++	if (ret == 0 && installing && (params->key_flag & KEY_FLAG_PAIRWISE) &&
++	    drc_deferred_gtk.bss == bss) {
++		int gret;
++
++		drc_deferred_gtk.bss = NULL;
++		gret = wpa_driver_nl80211_set_key(bss, &drc_deferred_gtk.params);
++		wpa_printf(MSG_INFO, "padlink: replayed deferred GTK, result %d",
++			   gret);
++		forced_memzero(drc_deferred_gtk.key, sizeof(drc_deferred_gtk.key));
++	}
++	return ret;
++#else /* CONFIG_PADLINK_DRC */
+ 	return wpa_driver_nl80211_set_key(bss, params);
++#endif /* CONFIG_PADLINK_DRC */
+ }
+ 
+ 
+-- 
+2.56.0
+

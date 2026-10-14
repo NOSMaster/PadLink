@@ -1,0 +1,41 @@
+From 0292c48a7fb8899b97ab141d50ee8655fa1fb845 Mon Sep 17 00:00:00 2001
+From: padlink <padlink@localhost.invalid>
+Date: Tue, 13 Oct 2026 21:29:01 +0200
+Subject: [PATCH 2/2] padlink: never use intra plane prediction
+
+On a real Wii U GamePad, everything below the first macroblock row
+(where plane prediction becomes possible) came out green-tinted with
+blocky edges, while FFmpeg decoded the same stream correctly. Barista's
+GamePad encoder also avoids plane prediction. Offer only vertical,
+horizontal and DC for 16x16 luma and for chroma.
+---
+ encoder/analyse.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/encoder/analyse.c b/encoder/analyse.c
+index adb63e1..dae57e4 100644
+--- a/encoder/analyse.c
++++ b/encoder/analyse.c
+@@ -479,7 +479,8 @@ static const int8_t i16x16_mode_available[5][5] =
+     {I_PRED_16x16_DC_LEFT, I_PRED_16x16_H, -1, -1, -1},
+     {I_PRED_16x16_DC_TOP, I_PRED_16x16_V, -1, -1, -1},
+     {I_PRED_16x16_V, I_PRED_16x16_H, I_PRED_16x16_DC, -1, -1},
+-    {I_PRED_16x16_V, I_PRED_16x16_H, I_PRED_16x16_DC, I_PRED_16x16_P, -1},
++    /* padlink: no plane prediction (the Wii U GamePad decodes it wrongly) */
++    {I_PRED_16x16_V, I_PRED_16x16_H, I_PRED_16x16_DC, -1, -1},
+ };
+ 
+ static const int8_t chroma_mode_available[5][5] =
+@@ -488,7 +489,8 @@ static const int8_t chroma_mode_available[5][5] =
+     {I_PRED_CHROMA_DC_LEFT, I_PRED_CHROMA_H, -1, -1, -1},
+     {I_PRED_CHROMA_DC_TOP, I_PRED_CHROMA_V, -1, -1, -1},
+     {I_PRED_CHROMA_V, I_PRED_CHROMA_H, I_PRED_CHROMA_DC, -1, -1},
+-    {I_PRED_CHROMA_V, I_PRED_CHROMA_H, I_PRED_CHROMA_DC, I_PRED_CHROMA_P, -1},
++    /* padlink: no plane prediction (the Wii U GamePad decodes it wrongly) */
++    {I_PRED_CHROMA_V, I_PRED_CHROMA_H, I_PRED_CHROMA_DC, -1, -1},
+ };
+ 
+ static const int8_t i8x8_mode_available[2][5][10] =
+-- 
+2.56.0
+

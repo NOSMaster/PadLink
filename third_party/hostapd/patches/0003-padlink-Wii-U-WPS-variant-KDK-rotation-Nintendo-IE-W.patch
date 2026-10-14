@@ -1,0 +1,142 @@
+From 1e0e75f3faa696e7b1eee07e9f47bc3945d97dbd Mon Sep 17 00:00:00 2001
+From: padlink <padlink@localhost.invalid>
+Date: Tue, 13 Oct 2026 20:02:58 +0200
+Subject: [PATCH 3/5] padlink: Wii U WPS variant (KDK rotation, Nintendo IE,
+ WPS 1.0)
+
+The GamePad derives AuthKey/KeyWrapKey/EMSK from the KDK rotated left by
+3 bytes, wraps WPS attributes in vendor type a4:c0:e1:f4, speaks WPS 1.0
+(no WFA Version2 extension) and expects the push-button bit to remain in
+the advertised config methods.
+---
+ src/ap/wps_hostapd.c         |  2 ++
+ src/common/ieee802_11_defs.h |  5 +++++
+ src/wps/wps_attr_build.c     |  4 ++++
+ src/wps/wps_common.c         | 10 ++++++++++
+ src/wps/wps_defs.h           |  5 +++++
+ src/wps/wps_registrar.c      |  7 ++++++-
+ 6 files changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/src/ap/wps_hostapd.c b/src/ap/wps_hostapd.c
+index 82d4d5f..6017a3f 100644
+--- a/src/ap/wps_hostapd.c
++++ b/src/ap/wps_hostapd.c
+@@ -1142,6 +1142,7 @@ int hostapd_init_wps(struct hostapd_data *hapd,
+ 			   "virtual_display for WPS 2.0 compliance");
+ 		wps->config_methods |= WPS_CONFIG_VIRT_DISPLAY;
+ 	}
++#ifndef CONFIG_PADLINK_DRC /* WPS 1.0 config methods only */
+ 	if ((wps->config_methods &
+ 	     (WPS_CONFIG_PUSHBUTTON | WPS_CONFIG_VIRT_PUSHBUTTON |
+ 	      WPS_CONFIG_PHY_PUSHBUTTON)) == WPS_CONFIG_PUSHBUTTON) {
+@@ -1149,6 +1150,7 @@ int hostapd_init_wps(struct hostapd_data *hapd,
+ 			   "virtual_push_button for WPS 2.0 compliance");
+ 		wps->config_methods |= WPS_CONFIG_VIRT_PUSHBUTTON;
+ 	}
++#endif /* CONFIG_PADLINK_DRC */
+ 	os_memcpy(wps->dev.pri_dev_type, hapd->conf->device_type,
+ 		  WPS_DEV_TYPE_LEN);
+ 
+diff --git a/src/common/ieee802_11_defs.h b/src/common/ieee802_11_defs.h
+index 0fe6310..259904c 100644
+--- a/src/common/ieee802_11_defs.h
++++ b/src/common/ieee802_11_defs.h
+@@ -1422,7 +1422,12 @@ struct ieee80211_ampe_ie {
+ 				* 00:50:F2 */
+ #define WPA_IE_VENDOR_TYPE 0x0050f201
+ #define WMM_IE_VENDOR_TYPE 0x0050f202
++#ifdef CONFIG_PADLINK_DRC
++/* Wii U uses a Nintendo vendor type for its WPS IE. */
++#define WPS_IE_VENDOR_TYPE 0xa4c0e1f4
++#else /* CONFIG_PADLINK_DRC */
+ #define WPS_IE_VENDOR_TYPE 0x0050f204
++#endif /* CONFIG_PADLINK_DRC */
+ #define OUI_WFA 0x506f9a
+ #define P2P_IE_VENDOR_TYPE 0x506f9a09
+ #define WFD_IE_VENDOR_TYPE 0x506f9a0a
+diff --git a/src/wps/wps_attr_build.c b/src/wps/wps_attr_build.c
+index f372256..8ee95bc 100644
+--- a/src/wps/wps_attr_build.c
++++ b/src/wps/wps_attr_build.c
+@@ -215,6 +215,10 @@ int wps_build_wfa_ext(struct wpabuf *msg, int req_to_enroll,
+ 	if (WPS_VERSION == 0x10)
+ 		return 0;
+ #endif /* CONFIG_WPS_TESTING */
++#ifdef CONFIG_PADLINK_DRC
++	/* The Wii U speaks WPS 1.0: no WFA Version2 extension. */
++	return 0;
++#endif /* CONFIG_PADLINK_DRC */
+ 
+ 	if (wpabuf_tailroom(msg) <
+ 	    7 + 3 + (req_to_enroll ? 3 : 0) +
+diff --git a/src/wps/wps_common.c b/src/wps/wps_common.c
+index 747dc47..f61652f 100644
+--- a/src/wps/wps_common.c
++++ b/src/wps/wps_common.c
+@@ -111,6 +111,16 @@ int wps_derive_keys(struct wps_data *wps)
+ 	len[2] = WPS_NONCE_LEN;
+ 	hmac_sha256_vector(dhkey, sizeof(dhkey), 3, addr, len, kdk);
+ 	wpa_hexdump_key(MSG_DEBUG, "WPS: KDK", kdk, sizeof(kdk));
++#ifdef CONFIG_PADLINK_DRC
++	/* Wii U GamePad: KDK is rotated left by 3 bytes before the KDF. */
++	{
++		u8 head[3];
++
++		os_memcpy(head, kdk, sizeof(head));
++		os_memmove(kdk, kdk + sizeof(head), sizeof(kdk) - sizeof(head));
++		os_memcpy(kdk + sizeof(kdk) - sizeof(head), head, sizeof(head));
++	}
++#endif /* CONFIG_PADLINK_DRC */
+ 
+ 	wps_kdf(kdk, NULL, 0, "Wi-Fi Easy and Secure Key Derivation",
+ 		keys, sizeof(keys));
+diff --git a/src/wps/wps_defs.h b/src/wps/wps_defs.h
+index ddaeda5..fbad694 100644
+--- a/src/wps/wps_defs.h
++++ b/src/wps/wps_defs.h
+@@ -280,7 +280,12 @@ enum wps_assoc_state {
+ };
+ 
+ 
++#ifdef CONFIG_PADLINK_DRC
++/* Same Nintendo vendor type as WPS_IE_VENDOR_TYPE. */
++#define WPS_DEV_OUI_WFA 0xa4c0e1f4
++#else /* CONFIG_PADLINK_DRC */
+ #define WPS_DEV_OUI_WFA 0x0050f204
++#endif /* CONFIG_PADLINK_DRC */
+ 
+ enum wps_dev_categ {
+ 	WPS_DEV_COMPUTER = 1,
+diff --git a/src/wps/wps_registrar.c b/src/wps/wps_registrar.c
+index f49784f..3f4f0e4 100644
+--- a/src/wps/wps_registrar.c
++++ b/src/wps/wps_registrar.c
+@@ -596,9 +596,11 @@ static int wps_build_sel_reg_config_methods(struct wps_registrar *reg,
+ 	if (!reg->sel_reg_union)
+ 		return 0;
+ 	methods = reg->wps->config_methods;
++#ifndef CONFIG_PADLINK_DRC /* Wii U keeps the push-button bit */
+ 	methods &= ~WPS_CONFIG_PUSHBUTTON;
+ 	methods &= ~(WPS_CONFIG_VIRT_PUSHBUTTON |
+ 		     WPS_CONFIG_PHY_PUSHBUTTON);
++#endif /* CONFIG_PADLINK_DRC */
+ 	if (reg->pbc)
+ 		wps_set_pushbutton(&methods, reg->wps->config_methods);
+ 	if (reg->sel_reg_config_methods_override >= 0)
+@@ -620,9 +622,12 @@ static int wps_build_probe_config_methods(struct wps_registrar *reg,
+ 	 * These are the methods that the AP supports as an Enrollee for adding
+ 	 * external Registrars.
+ 	 */
+-	methods = reg->wps->config_methods & ~WPS_CONFIG_PUSHBUTTON;
++	methods = reg->wps->config_methods;
++#ifndef CONFIG_PADLINK_DRC /* Wii U keeps the push-button bit */
++	methods &= ~WPS_CONFIG_PUSHBUTTON;
+ 	methods &= ~(WPS_CONFIG_VIRT_PUSHBUTTON |
+ 		     WPS_CONFIG_PHY_PUSHBUTTON);
++#endif /* CONFIG_PADLINK_DRC */
+ 	wpa_printf(MSG_DEBUG, "WPS:  * Config Methods (%x)", methods);
+ 	wpabuf_put_be16(msg, ATTR_CONFIG_METHODS);
+ 	wpabuf_put_be16(msg, 2);
+-- 
+2.56.0
+

@@ -1,0 +1,123 @@
+From 4170a8681eb64f6dfa4235340563923efd2b0eb6 Mon Sep 17 00:00:00 2001
+From: padlink <padlink@localhost.invalid>
+Date: Tue, 13 Oct 2026 20:02:58 +0200
+Subject: [PATCH 5/5] padlink: Wii U element order in beacons and probe
+ responses
+
+Emit the first configured vendor element, then WPS, then the remaining
+vendor elements, then WMM, matching the Wii U pairing AP layout.
+---
+ src/ap/beacon.c | 45 +++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+diff --git a/src/ap/beacon.c b/src/ap/beacon.c
+index cec0c98..b8b6649 100644
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -691,6 +691,39 @@ static size_t hostapd_probe_resp_elems_len(struct hostapd_data *hapd,
+ }
+ 
+ 
++#ifdef CONFIG_PADLINK_DRC
++/*
++ * Wii U pairing AP element order: first configured vendor element (Broadcom
++ * HT), WPS, the remaining vendor elements, then WMM. The GamePad relies on
++ * this legacy layout when it picks a pairing AP.
++ */
++static u8 * drc_eid_vendor_wps_wmm(struct hostapd_data *hapd, u8 *pos,
++				   const struct wpabuf *wps_ie)
++{
++	const struct wpabuf *v = hapd->conf->vendor_elements;
++	const u8 *vhead = v ? wpabuf_head(v) : NULL;
++	size_t vlen = v ? wpabuf_len(v) : 0;
++	size_t first = 0;
++
++	if (vlen >= 2 && (size_t) 2 + vhead[1] <= vlen)
++		first = 2 + vhead[1];
++	os_memcpy(pos, vhead, first);
++	pos += first;
++#ifdef CONFIG_WPS
++	if (hapd->conf->wps_state && wps_ie) {
++		os_memcpy(pos, wpabuf_head(wps_ie), wpabuf_len(wps_ie));
++		pos += wpabuf_len(wps_ie);
++	}
++#endif /* CONFIG_WPS */
++	if (vlen > first) {
++		os_memcpy(pos, vhead + first, vlen - first);
++		pos += vlen - first;
++	}
++	return hostapd_eid_wmm(hapd, pos);
++}
++#endif /* CONFIG_PADLINK_DRC */
++
++
+ static u8 * hostapd_probe_resp_fill_elems(struct hostapd_data *hapd,
+ 					  struct probe_resp_params *params,
+ 					  u8 *pos, size_t len)
+@@ -852,6 +885,9 @@ static u8 * hostapd_probe_resp_fill_elems(struct hostapd_data *hapd,
+ 	pos = hostapd_get_wpa_ie(hapd, pos, epos - pos);
+ 	pos = hostapd_get_osen_ie(hapd, pos, epos - pos);
+ 
++#ifdef CONFIG_PADLINK_DRC
++	pos = drc_eid_vendor_wps_wmm(hapd, pos, hapd->wps_probe_resp_ie);
++#else /* CONFIG_PADLINK_DRC */
+ 	/* Wi-Fi Alliance WMM */
+ 	pos = hostapd_eid_wmm(hapd, pos);
+ 
+@@ -862,6 +898,7 @@ static u8 * hostapd_probe_resp_fill_elems(struct hostapd_data *hapd,
+ 		pos += wpabuf_len(hapd->wps_probe_resp_ie);
+ 	}
+ #endif /* CONFIG_WPS */
++#endif /* CONFIG_PADLINK_DRC */
+ 
+ #ifdef CONFIG_P2P
+ 	if ((hapd->conf->p2p & P2P_ENABLED) && params->is_p2p &&
+@@ -885,11 +922,13 @@ static u8 * hostapd_probe_resp_fill_elems(struct hostapd_data *hapd,
+ 	pos = hostapd_eid_owe_trans(hapd, pos, epos - pos);
+ 	pos = hostapd_eid_dpp_cc(hapd, pos, epos - pos);
+ 
++#ifndef CONFIG_PADLINK_DRC /* already placed before WMM */
+ 	if (hapd->conf->vendor_elements) {
+ 		os_memcpy(pos, wpabuf_head(hapd->conf->vendor_elements),
+ 			  wpabuf_len(hapd->conf->vendor_elements));
+ 		pos += wpabuf_len(hapd->conf->vendor_elements);
+ 	}
++#endif /* CONFIG_PADLINK_DRC */
+ 
+ #ifdef CONFIG_TESTING_OPTIONS
+ 	if (hapd->conf->presp_elements) {
+@@ -2335,6 +2374,9 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
+ 	tailpos = hostapd_get_wpa_ie(hapd, tailpos, tailend - tailpos);
+ 	tailpos = hostapd_get_osen_ie(hapd, tailpos, tailend - tailpos);
+ 
++#ifdef CONFIG_PADLINK_DRC
++	tailpos = drc_eid_vendor_wps_wmm(hapd, tailpos, hapd->wps_beacon_ie);
++#else /* CONFIG_PADLINK_DRC */
+ 	/* Wi-Fi Alliance WMM */
+ 	tailpos = hostapd_eid_wmm(hapd, tailpos);
+ 
+@@ -2345,6 +2387,7 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
+ 		tailpos += wpabuf_len(hapd->wps_beacon_ie);
+ 	}
+ #endif /* CONFIG_WPS */
++#endif /* CONFIG_PADLINK_DRC */
+ 
+ #ifdef CONFIG_P2P
+ 	if ((hapd->conf->p2p & P2P_ENABLED) && hapd->p2p_beacon_ie) {
+@@ -2368,11 +2411,13 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
+ 					tail + tail_len - tailpos);
+ 	tailpos = hostapd_eid_dpp_cc(hapd, tailpos, tail + tail_len - tailpos);
+ 
++#ifndef CONFIG_PADLINK_DRC /* already placed before WMM */
+ 	if (hapd->conf->vendor_elements) {
+ 		os_memcpy(tailpos, wpabuf_head(hapd->conf->vendor_elements),
+ 			  wpabuf_len(hapd->conf->vendor_elements));
+ 		tailpos += wpabuf_len(hapd->conf->vendor_elements);
+ 	}
++#endif /* CONFIG_PADLINK_DRC */
+ 
+ 	tail_len = tailpos > tail ? tailpos - tail : 0;
+ 
+-- 
+2.56.0
+
